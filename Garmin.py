@@ -319,6 +319,87 @@ if runs.empty:
     st.error("Aucune course trouvée dans cet export.")
     st.stop()
 
+#VO2_FIELD_PRIO = ("vo2maxprecisevalue", "vo2maxvalue", "vo2max", "maxmet")
+VO2_FIELD_PRIO = ("vo2maxprecisevalue", "maxmet", "vo2maxvalue", "vo2max")
+VO2_DATE_KEYS = ("calendardate", "calendarday", "date", "timestamp", "startdate")
+VO2_FILE_HINTS = ("maxmet", "metric", "vo2", "fitnessage")
+
+
+def _vo2_key(k):
+    return str(k).lower().replace("_", "").replace(" ", "")
+
+
+def _vo2_collect(node, out):
+    """Parcourt un JSON quelconque et récupère (date, champ, valeur, sport)."""
+    if isinstance(node, dict):
+        keys = {_vo2_key(k): k for k in node}
+        present = [k for k in VO2_FIELD_PRIO if k in keys]
+        if present:
+            dk = next((keys[k] for k in VO2_DATE_KEYS if k in keys), None)
+            sport = node.get(keys.get("sport")) if "sport" in keys else None
+            for nk in present:
+                out.append((node.get(dk) if dk else None, nk,
+                            node.get(keys[nk]), str(sport or "")))
+        for v in node.values():
+            _vo2_collect(v, out)
+    elif isinstance(node, list):
+        for v in node:
+            _vo2_collect(v, out)
+    return out
+
+
+@st.cache_data(show_spinner="Lecture de la VO2max Garmin…")
+def load_vo2_profile(data_dir, sig):
+    """Série quotidienne de la VO2max course à pied telle que Garmin l'affiche."""
+    empty = pd.DataFrame(columns=["Date", "VO2", "Champ"])
+    rows, srcs = [], []
+
+    for root, _dirs, files in os.walk(data_dir):
+        for fn in files:
+            low = fn.lower()
+            if not low.endswith(".json") or not any(h in low for h in VO2_FILE_HINTS):
+                continue
+            try:
+                with open(os.path.join(root, fn), "r", encoding="utf-8") as f:
+                    blob = json.load(f)
+            except Exception:
+                continue
+            got = _vo2_collect(blob, [])
+            if got:
+                rows += got
+                srcs.append(fn)
+
+    if not rows:
+        return empty, []
+
+    v = pd.DataFrame(rows, columns=["raw", "Champ", "Valeur", "Sport"])
+    sp = v["Sport"].astype(str).str.upper()
+    v = v[sp.str.contains("RUN") | (sp.str.strip() == "")]        # course à pied only
+    v["Valeur"] = pd.to_numeric(v["Valeur"], errors="coerce")
+    v = v[v["Valeur"] > 0]
+    if v.empty:
+        return empty, sorted(set(srcs))
+
+    # dates : "2026-09-03", "2026-09-03T07:12:00" ou epoch en ms
+    ms = pd.to_numeric(v["raw"], errors="coerce")
+    dt = pd.to_datetime(v["raw"].astype(str), errors="coerce", format="ISO8601")
+    dt = dt.where(ms.isna(), pd.to_datetime(ms, unit="ms", errors="coerce"))
+    v["Date"] = dt.dt.normalize()
+    v = v.dropna(subset=["Date"])
+    if v.empty:
+        return empty, sorted(set(srcs))
+
+    val = v["Valeur"].where(v["Champ"] != "maxmet", v["Valeur"] * 3.5)   # 1 MET = 3,5
+    for _ in range(3):                                   # certains exports encodent ×10
+        val = val.where(val <= 100, val / 10)
+    v["VO2"] = val.round(3)
+
+    v["prio"] = v["Champ"].map({k: i for i, k in enumerate(VO2_FIELD_PRIO)})
+    v = (v.sort_values(["Date", "prio"])
+          .groupby("Date", as_index=False).first()
+          .sort_values("Date"))
+    return v[["Date", "VO2", "Champ"]].reset_index(drop=True), sorted(set(srcs))
+
 
 # --- Filtres ----------------------------------------------
 with st.sidebar:
@@ -401,6 +482,88 @@ tab1, tab2, tab3, tab4, tab5 = st.tabs(["  📈 Vue d'ensemble  ", "  ⚡ Perfor
 # TAB 1 · VUE D'ENSEMBLE
 # ==========================================================
 with tab1:
+
+    # ==========================================================
+    #  [AJOUT] Heatmap calendrier · 30 jours glissants
+    # ==========================================================
+    st.markdown("#### 🗓️ Calendrier des 30 derniers jours")
+
+    HM_DAYS = 30
+    hm_end = tmax.normalize()
+    hm_start = hm_end - timedelta(days=HM_DAYS - 1)
+
+    hm_src = d[(d["Date"] >= hm_start) & (d["Date"] < hm_end + timedelta(days=1))].copy()
+
+    if hm_src.empty:
+        st.info("Aucune séance sur les 30 derniers jours avec les filtres actuels.")
+    else:
+        hm_src["Jour"] = hm_src["Date"].dt.normalize()
+        full_idx = pd.date_range(hm_start, hm_end, freq="D")
+        hm_day = (hm_src.groupby("Jour")
+                        .agg(km=("Distance (km)", "sum"), mn=("Temps (min)", "sum"),
+                             n=("Distance (km)", "size"), bpm=("BPM moyen", "mean"))
+                        .reindex(full_idx))
+        hm_day["pace"] = hm_day["mn"] / hm_day["km"].replace(0, np.nan)
+
+
+        # ---- grille semaines × jours ----
+        wk_of = {day: day - timedelta(days=int(day.weekday())) for day in full_idx}
+        weeks = sorted(set(wk_of.values()))
+        wmap = {w: i for i, w in enumerate(weeks)}
+
+        nrow = len(weeks)
+        z = np.full((nrow, 7), np.nan)
+        cells = []                                   # (row, col, jour, km)
+        hov = np.full((nrow, 7), "", dtype=object)
+
+        for day in full_idx:
+            r, c = wmap[wk_of[day]], int(day.weekday())
+            km = hm_day.at[day, "km"]
+            if pd.isna(km):
+                z[r, c] = 0.0
+                hov[r, c] = f"<b>{day:%a %d/%m}</b><br>😴 repos"
+                cells.append((r, c, day, np.nan))
+            else:
+                z[r, c] = float(km)
+                row = hm_day.loc[day]
+                extra = f" · ❤️ {row['bpm']:.0f} bpm" if pd.notna(row["bpm"]) else ""
+                multi = f"<br>{int(row['n'])} séances cumulées" if row["n"] > 1 else ""
+                hov[r, c] = (f"<b>{day:%a %d/%m}</b><br>📏 {km:.1f} km · ⏱️ {row['mn']:.0f} min"
+                             f"<br>🏃 {fmt_pace(row['pace'])} /km{extra}{multi}")
+                cells.append((r, c, day, float(km)))
+
+        zmax = max(float(np.nanmax(z)), 1.0)
+        HM_SCALE = [[0.00, "#141C27"], [0.01, "#14343F"], [0.35, "#177F86"],
+                    [0.70, "#36CFC9"], [1.00, "#B6F5E9"]]
+
+        fhm = go.Figure(go.Heatmap(
+            z=z, x=["Lun", "Mar", "Mer", "Jeu", "Ven", "Sam", "Dim"],
+            y=[f"sem. {w:%d/%m}" for w in weeks],
+            customdata=hov, hovertemplate="%{customdata}<extra></extra>", hoverongaps=False,
+            colorscale=HM_SCALE, zmin=0, zmax=zmax, xgap=5, ygap=5,
+            colorbar=dict(title="km", thickness=11, len=.85, outlinewidth=0,
+                          tickfont=dict(size=11))))
+
+        for r, c, day, km in cells:
+            xr, yr = ["Lun", "Mar", "Mer", "Jeu", "Ven", "Sam", "Dim"][c], f"sem. {weeks[r]:%d/%m}"
+            if np.isnan(km):
+                fhm.add_annotation(x=xr, y=yr, text=f"<span style='font-size:10px'>{day.day}</span>",
+                                  showarrow=False, font=dict(color="rgba(230,233,239,.30)", size=10),
+                                  yshift=0)
+            else:
+                txt_col = "#0B1220" if km / zmax > .55 else C["txt"]
+                fhm.add_annotation(x=xr, y=yr, showarrow=False,
+                                  text=(f"<span style='font-size:9.5px;opacity:.75'>{day.day}</span>"
+                                        f"<br><b>{km:.1f}</b>"),
+                                  font=dict(color=txt_col, size=12.5), align="center")
+
+        fhm.update_xaxes(side="top", showgrid=False, tickfont=dict(size=12, color=C["muted"]))
+        fhm.update_yaxes(autorange="reversed", showgrid=False,
+                         tickfont=dict(size=11, color=C["muted"]))
+        fhm.update_layout(title="<i>Plus la case est claire, plus la sortie est longue</i>",
+                          margin=dict(l=20, r=20, t=80, b=30))
+        show(fhm, 95 + 78 * nrow)
+    
     dsz = d["Distance (km)"]
     sizes = 8 + 13 * (dsz - dsz.min()) / max(dsz.max() - dsz.min(), 1e-9)
     cd = np.stack([d["Allure txt"], d["Distance (km)"], d["BPM moyen"],
@@ -460,7 +623,6 @@ with tab1:
     fv.update_layout(yaxis_title="km", bargap=.3)
     show(fv, 400)
 
-
 # ==========================================================
 # TAB 2 · PERFORMANCE
 # ==========================================================
@@ -490,6 +652,96 @@ with tab2:
     fe.update_layout(title="Indice d'efficacité cardiaque (vitesse / FC × 100)", yaxis_title="Indice")
     show(fe, 430)
     st.caption("💡 Plus l'indice monte, plus tu vas vite pour un même coût cardiaque.")
+    
+    # ==========================================================
+        #  [AJOUT] Évolution de la VO2max  (valeur montre + estimations séance)
+    # ==========================================================
+
+    st.markdown("#### 🫁 VO2max")
+
+    vprof, vsrc = load_vo2_profile(DATA_DIR, os.path.getmtime(JSON_FILE))
+    if len(vprof):
+        vp = vprof[(vprof["Date"] >= d["Date"].min().normalize()) &
+                   (vprof["Date"] <= tmax.normalize())].copy()
+    else:
+        vp = vprof.copy()
+
+    # --- estimations brutes séance par séance (champ des activités) ---
+    vcol = next((c for c in d.columns if "vo2max" in str(c).lower().replace("_", "")), None)
+    vact = pd.DataFrame(columns=["Date", "VO2", "km", "Allure txt"])
+    if vcol is not None:
+        vser = pd.to_numeric(d[vcol], errors="coerce")
+        vser = vser.where(vser > 0)
+        for _ in range(3):                               # exports encodés ×10
+            if vser.notna().any() and vser.median() > 100:
+                vser = vser / 10.0
+        vact = (pd.DataFrame({"Date": d["Date"], "VO2": vser, "km": d["Distance (km)"],
+                              "Allure txt": d["Allure txt"]})
+                .dropna(subset=["VO2"]).sort_values("Date"))
+
+    if vp.empty and vact.empty:
+        st.info("Ton export ne contient aucune VO2max exploitable "
+                "(ni `MetricsMaxMetData_*.json`, ni champ `vO2MaxValue` dans les activités).")
+    else:
+        official = not vp.empty
+        ref = vp if official else vact
+        v_now, v_first = float(ref["VO2"].iloc[-1]), float(ref["VO2"].iloc[0])
+        v_lo, v_hi = float(ref["VO2"].min()), float(ref["VO2"].max())
+        if not vact.empty:
+            v_lo, v_hi = min(v_lo, float(vact["VO2"].min())), max(v_hi, float(vact["VO2"].max()))
+        vma = v_now / 3.5                                # VMA ≈ VO2max / 3,5 (km/h)
+
+        q1, q2, q3 = st.columns(3)
+        kpi(q1, "VO2max actuelle" if official else "VO2max (estim. séance)",
+            f"{v_now:.0f}", "ml/kg/min", pct(v_now, v_first),
+            delta_txt="vs début de période", color=C["ok"] if official else C["warn"])
+        kpi(q2, "Pic sur la période", f"{float(ref['VO2'].max()):.0f}", "ml/kg/min",
+            None, color=C["eff"])
+        kpi(q3, "VMA estimée", f"{vma:.1f}", f"km/h · {fmt_pace(60/vma)} /km",
+            None, color=C["pace"])
+        st.write("")
+
+        fvo = go.Figure()
+        if not vact.empty:
+            fvo.add_trace(go.Scatter(
+                x=vact["Date"], y=vact["VO2"], mode="markers",
+                name="Estimation brute de la séance",
+                marker=dict(size=7, color=C["muted"], opacity=.55,
+                            line=dict(width=.5, color="rgba(255,255,255,.2)")),
+                customdata=np.stack([vact["km"], vact["Allure txt"]], -1),
+                hovertemplate="<b>%{x|%d/%m/%Y}</b><br>estimation séance "
+                              "<b>%{y:.1f}</b> ml/kg/min<br>📏 %{customdata[0]:.1f} km · "
+                              "🏃 %{customdata[1]} /km<extra></extra>"))
+        if official:
+            fvo.add_trace(go.Scatter(
+                x=vp["Date"], y=vp["VO2"], mode="lines+markers",
+                name="VO2max Garmin (celle de ta montre)",
+                line=dict(color=C["ok"], width=3, shape="spline", smoothing=1.2),
+                marker=dict(size=6, color=C["ok"],
+                            line=dict(width=1, color="rgba(255,255,255,.3)")),
+                hovertemplate="<b>%{x|%d/%m/%Y}</b><br>🫁 <b>%{y:.1f}</b> ml/kg/min"
+                              "<extra></extra>"))
+
+        pad = max((v_hi - v_lo) * .18, 1.0)
+        fvo.update_yaxes(title_text="VO2max (ml/kg/min)", range=[v_lo - pad, v_hi + pad])
+        fvo.update_xaxes(title_text="Date", tickformat="%d %b")
+        fvo.update_layout(title=f"<i>{v_first:.1f} → {v_now:.1f} ml/kg/min "
+                                f"({v_now - v_first:+.1f} sur la période)</i>")
+        show(fvo, 400)
+
+        if official:
+            st.caption(
+                "💡 La **ligne verte** est la VO2max de ton profil Garmin : c'est exactement "
+                "le chiffre affiché sur la montre. Les **points gris** "
+                "sont l'estimation brute calculée séance par séance : elle est "
+                "quasi toujours plus basse, car Garmin lisse et ne retient que les séances "
+                "de qualité.")
+        else:
+            st.warning(
+                "⚠️ Aucun fichier `MetricsMaxMetData_*.json` trouvé dans l'export : "
+                "seule l'estimation **séance par séance** est affichée, et elle est "
+                "typiquement 1 à 3 points **sous** la valeur de ta montre. Vérifie que le "
+                "dossier `DI_CONNECT/DI-Connect-Metrics` est bien présent dans le ZIP.")
 
     # ---- Allure × FC -------------------------------------
     st.markdown("#### 🎯 Allure × fréquence cardiaque")
@@ -580,7 +832,7 @@ with tab2:
     fd.update_xaxes(title_text="Distance (km)")
     show(fd, 330)
 
-
+                
 # ==========================================================
 # TAB 3 · CHARGE & VOLUME
 # ==========================================================
@@ -751,6 +1003,100 @@ with tab3:
         st.caption(f"💡 Ressenti moyen : **{moy:.0f}/100** · "
                    f"{cnt.loc[[75, 100]].sum()} séance(s) en 🙂/🤩 contre "
                    f"{cnt.loc[[0, 25]].sum()} en 😵/😕.")
+
+    # ==========================================================
+    #  [AJOUT] Répartition mensuelle du temps par zone d'intensité
+    # ==========================================================
+    st.divider()
+    st.markdown("#### 🎚️ Où passes-tu ton temps ? · zones d'intensité par mois")
+
+    ZS_SHORT = ["Z1", "Z2", "Z3", "Z4", "Z5"]
+
+
+    def _z_suffix(c):
+        s = "".join(ch for ch in str(c) if ch.isdigit())
+        return int(s) if s else -1
+
+
+    def zone_minutes(df):
+        """Minutes par zone (Z1..Z5) pour chaque séance.
+
+        1) champs Garmin `hrTimeInZone_*` s'ils existent → répartition intra-séance (précise)
+        2) sinon : toute la durée de la séance est affectée à sa zone de FC moyenne (approx.)
+        """
+        cols = sorted([c for c in df.columns if str(c).lower().startswith("hrtimeinzone")],
+                      key=_z_suffix)
+        if len(cols) >= 5:
+            raw = df[cols].apply(pd.to_numeric, errors="coerce").fillna(0.0)
+            tot = raw.sum(axis=1)
+            ref = pd.to_numeric(df["Temps (min)"], errors="coerce") * 60.0
+            m = (tot > 0) & ref.gt(0)
+            if int(m.sum()) >= 3:
+                k = float(np.nanmedian((tot[m] / ref[m]).to_numpy()))
+                div = 60.0 if 0.5 < k < 2.5 else (60_000.0 if k > 100 else 1.0)   # s / ms / min
+                mins = raw / div
+                if _z_suffix(cols[0]) == 0 and len(cols) >= 6:      # zone 0 fusionnée dans Z1
+                    z = pd.concat([mins[cols[0]] + mins[cols[1]]] +
+                                  [mins[c] for c in cols[2:6]], axis=1)
+                else:
+                    z = mins[cols[:5]].copy()
+                z.columns = ZS_SHORT
+                return z, "garmin"
+
+        z = pd.DataFrame(0.0, index=df.index, columns=ZS_SHORT)
+        lab2short = {lab: ZS_SHORT[i] for i, lab in enumerate(zlabs)}
+        for i in df.index:
+            sh = lab2short.get(df.at[i, "Zone"])
+            t = df.at[i, "Temps (min)"]
+            if sh is not None and pd.notna(t):
+                z.at[i, sh] = float(t)
+        return z, "fcmax"
+
+
+    zmin, zsrc = zone_minutes(d)
+    mois = d["Date"].dt.to_period("M").dt.to_timestamp()
+
+    g = zmin.groupby(mois)[ZS_SHORT].sum()
+    tot_m = g.sum(axis=1)
+    g, tot_m = g[tot_m > 0], tot_m[tot_m > 0]
+
+    if g.empty:
+        st.info("Pas assez de données de fréquence cardiaque pour répartir le temps par zone.")
+    else:
+        nse = d.groupby(mois).size().reindex(g.index).fillna(0)
+        share = g.div(tot_m, axis=0) * 100
+
+        MOIS_FR = {1: "janv.", 2: "févr.", 3: "mars", 4: "avr.", 5: "mai", 6: "juin", 7: "juil.",
+                   8: "août", 9: "sept.", 10: "oct.", 11: "nov.", 12: "déc."}
+        xlab = [f"{MOIS_FR[m.month]} {m.year}<br>"
+                f"<span style='font-size:10px;color:{C['muted']}'>"
+                f"{int(nse.loc[m])} séances · {tot_m.loc[m]/60:.1f} h</span>" for m in g.index]
+
+        fz = go.Figure()
+        for i, zs in enumerate(ZS_SHORT):
+            pc, mn = share[zs].to_numpy(), g[zs].to_numpy()
+            fz.add_bar(
+                x=xlab, y=pc, name=Z_NAME[i],
+                marker=dict(color=Z_HEX[i], opacity=.92, line=dict(width=0)),
+                text=[f"{v:.0f} %" if v >= 6 else "" for v in pc],
+                textposition="inside", insidetextanchor="middle",
+                textfont=dict(color="#0B1220", size=11.5),
+                customdata=np.stack([mn, mn / 60], -1),
+                hovertemplate=(f"<b>{Z_NAME[i]}</b><br>%{{y:.1f}} % du temps"
+                               "<br>%{customdata[0]:.0f} min (%{customdata[1]:.1f} h)<extra></extra>"))
+
+        #fz.add_hline(y=80, line=dict(color="rgba(255,255,255,.45)", width=1.5, dash="dash"),
+                     #annotation_text="objectif ≈ 80 % en Z1–Z2-Z3", annotation_position="top right",
+         #            annotation_font=dict(color=C["txt"], size=11))
+        fz.update_yaxes(title_text="% du temps couru", range=[0, 104],
+                        ticksuffix=" %", dtick=20)
+        fz.update_xaxes(title_text=None, showgrid=False, tickfont=dict(size=12))
+        fz.update_layout(barmode="stack", bargap=.45, hovermode="x unified",
+                         #title="<i>Le bas des barres (Z1+Z2+Z3) doit atteindre ~80 % : la base aérobie</i>",
+                         margin=dict(l=25, r=30, t=80, b=70))
+        show(fz, 470)
+        
+        st.caption("Temps réel passé dans chaque zone, pas de temps estimé les bornes sont celle de ta montre")
 
 
 # ==========================================================
