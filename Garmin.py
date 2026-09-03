@@ -722,17 +722,35 @@ with tab3:
 
                "la « semaine habituelle » a besoin de 28 jours pour se calibrer.")
 
-    # ---- RPE ----------------------------------------------
-    if (d["RPE"] > 0).any():
-        st.markdown("#### 😊 Ressenti déclaré (RPE)")
-        rp = (d[d["RPE"] > 0].groupby("Ressenti")
-              .agg(n=("RPE", "size"), rpe=("RPE", "first")).sort_values("rpe"))
-        fr = go.Figure(go.Bar(x=rp.index, y=rp["n"],
-                              marker=dict(color=rp["rpe"], colorscale="RdYlGn_r",
-                                          cmin=0, cmax=100, line_width=0),
-                              hovertemplate="<b>%{x}</b> : %{y} séances<extra></extra>"))
-        fr.update_layout(yaxis_title="Nb de séances", bargap=.45)
-        show(fr, 320)
+  # ---- Ressenti ------------------------------------------
+
+    if d["Feel"].notna().any():
+        st.markdown("#### 😊 Ressenti déclaré")
+
+        cnt = (d.dropna(subset=["Feel"]).groupby("Feel").size().reindex(FEEL_ORDER, fill_value=0))          # ← ordre garanti
+        tot = cnt.sum()
+
+        fr = go.Figure(go.Bar(
+            x=[f"{FEEL_EMO[v]}<br>{FEEL_NAME[v]}" for v in FEEL_ORDER],
+            y=cnt.values,
+            marker=dict(color=[FEEL_COL[v] for v in FEEL_ORDER],
+                        opacity=.88, line_width=0),
+            text=[f"{n}<br><span style='font-size:10px'>{n/tot*100:.0f} %</span>"
+                  if n else "" for n in cnt.values],
+            textposition="outside", textfont=dict(color=C["muted"], size=12),
+            cliponaxis=False,
+            hovertemplate="<b>%{x}</b><br>%{y} séance(s)<extra></extra>"))
+
+        fr.update_xaxes(tickfont=dict(size=12), showgrid=False, title_text=None)
+        fr.update_yaxes(title_text="Nb de séances",
+                        range=[0, max(cnt.max() * 1.28, 1)])
+        fr.update_layout(bargap=.45, margin=dict(l=25, r=30, t=50, b=70))
+        show(fr, 340)
+
+        moy = (d["Feel"] * 1).mean()
+        st.caption(f"💡 Ressenti moyen : **{moy:.0f}/100** · "
+                   f"{cnt.loc[[75, 100]].sum()} séance(s) en 🙂/🤩 contre "
+                   f"{cnt.loc[[0, 25]].sum()} en 😵/😕.")
 
 
 # ==========================================================
