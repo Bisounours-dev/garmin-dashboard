@@ -333,47 +333,60 @@ for root, dirs, files in os.walk(DATA_DIR):
     if USER_DIR is not None:
         break
 
+Hrz_File = None
+for root, dirs, files in os.walk(DATA_DIR):
+    for fn in files:
+        if fn.lower().endswith('heartRateZones.json'):
+            Hrz_File = os.path.join(root, d) 
+            break
+    if Hrz_File is not None:
+        break
 
-@st.cache_data(show_spinner="Lecture du profil Garmin…")
-def load_profile(user_dir, mtime):
-    """Aplatit tous les JSON de DI-Connect-User en un df Fichier/Champ/Chemin/Valeur."""
+@st.cache_data(show_spinner="Lecture des zones FC Garmin…")
+def load_json_file(json_file, mtime):
+    """Aplatit un seul fichier JSON en un df Fichier/Champ/Chemin/Valeur."""
     rows = []
 
     def flat(obj, fichier, chemin=""):
         if isinstance(obj, dict):
             for k, v in obj.items():
                 flat(v, fichier, f"{chemin}.{k}" if chemin else str(k))
+
         elif isinstance(obj, list):
-            for i, v in enumerate(obj[:100]):          # garde-fou sur les gros tableaux
+            for i, v in enumerate(obj[:100]):
                 flat(v, fichier, f"{chemin}[{i}]")
+
         elif obj is not None and obj != "":
-            rows.append({"Fichier": fichier,
-                         "Champ": chemin.split(".")[-1].split("[")[0],
-                         "Chemin": chemin,
-                         "Valeur": str(obj)})          # str = pas de souci Arrow
+            rows.append({
+                "Fichier": fichier,
+                "Champ": chemin.split(".")[-1].split("[")[0],
+                "Chemin": chemin,
+                "Valeur": str(obj)
+            })
 
-    if not user_dir or not os.path.exists(user_dir):
-        return pd.DataFrame(columns=["Fichier", "Champ", "Chemin", "Valeur"])
+    if not json_file or not os.path.exists(json_file):
+        return pd.DataFrame(
+            columns=["Fichier", "Champ", "Chemin", "Valeur"]
+        )
 
-    for root, _dirs, files in os.walk(user_dir):
-        for fn in sorted(files):
-            if not fn.lower().endswith(".json"):
-                continue
-            try:
-                with open(os.path.join(root, fn), "r", encoding="utf-8") as f:
-                    raw = json.load(f)
-                if isinstance(raw, str):               # JSON encapsulé dans une string
-                    raw = json.loads(raw)
-                flat(raw, fn)
-            except Exception:
-                continue
+    try:
+        with open(json_file, "r", encoding="utf-8") as f:
+            raw = json.load(f)
+
+        # Cas où le JSON contient lui-même une string JSON
+        if isinstance(raw, str):
+            raw = json.loads(raw)
+
+        flat(raw, os.path.basename(json_file))
+
+    except Exception:
+        pass
 
     return pd.DataFrame(rows)
+    
+hrz = load_json_file(Hrz_File,os.path.getmtime(Hrz_File))
 
-
-profile = load_profile(USER_DIR, os.path.getmtime(JSON_FILE))
-
-st.dataframe(profile)
+st.dataframe(hrz)
 
 
 def pget(champs, lo=None, hi=None):
