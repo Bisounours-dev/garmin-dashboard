@@ -327,7 +327,7 @@ if runs.empty:
 USER_DIR = None
 for root, dirs, files in os.walk(DATA_DIR):
     for d in dirs:
-        if "di-connect-user" in d.lower():
+        if "di-connect-wellness" in d.lower():
             USER_DIR = os.path.join(root, d)
             break
     if USER_DIR is not None:
