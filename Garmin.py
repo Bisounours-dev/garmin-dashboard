@@ -321,13 +321,16 @@ if runs.empty:
     
 
 Hrz_File = None
+
 for root, dirs, files in os.walk(DATA_DIR):
     for fn in files:
-        if fn.lower().endswith('heartRateZones.json'):
-            Hrz_File = os.path.join(root, fn) 
+        if fn.lower().endswith('heartratezones.json'):
+            Hrz_File = os.path.join(root, fn)
             break
+
     if Hrz_File is not None:
         break
+
 
 @st.cache_data(show_spinner="Lecture des zones FC Garmin…")
 def load_json_file(json_file, mtime):
@@ -360,7 +363,6 @@ def load_json_file(json_file, mtime):
         with open(json_file, "r", encoding="utf-8") as f:
             raw = json.load(f)
 
-        # Cas où le JSON contient lui-même une string JSON
         if isinstance(raw, str):
             raw = json.loads(raw)
 
@@ -370,8 +372,12 @@ def load_json_file(json_file, mtime):
         pass
 
     return pd.DataFrame(rows)
-    
-hrz = load_json_file(Hrz_File,os.path.getmtime(Hrz_File))
+
+
+hrz = load_json_file(
+    Hrz_File,
+    os.path.getmtime(Hrz_File) if Hrz_File else 0
+)
 
 st.dataframe(hrz)
 
