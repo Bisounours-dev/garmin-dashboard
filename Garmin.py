@@ -474,17 +474,6 @@ with st.sidebar:
     else:
         st.caption(f"⚠️ Introuvable dans l'export → valeur par défaut **{HR_MAX_DEFAULT} bpm**")
 
-    with st.expander("🔎 Profil Garmin (DI-Connect-User)"):
-        if profile.empty:
-            st.caption("Dossier `DI-Connect-User` absent ou illisible.")
-        else:
-            f = st.text_input("Filtrer un champ", "heart",
-                              help="Essaie : heart, hr, vo2, threshold, weight…")
-            v = profile[profile["Champ"].str.contains(f, case=False, na=False)] if f else profile
-            st.dataframe(v[["Fichier", "Champ", "Valeur"]],
-                         hide_index=True, use_container_width=True, height=260)
-            st.caption(f"{len(profile)} champs · fichiers : "
-                       + ", ".join(f"`{x}`" for x in sorted(profile['Fichier'].unique())[:6]))
     smooth = st.slider("Lissage des tendances (nb séances)", 3, 15, 7, 2)
     st.caption(f"📄 {os.path.basename(JSON_FILE)} · {len(runs)} courses · "
                f"maj {pd.to_datetime(os.path.getmtime(JSON_FILE), unit='s'):%d/%m/%Y}")
