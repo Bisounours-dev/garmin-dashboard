@@ -373,6 +373,8 @@ def load_profile(user_dir, mtime):
 
 profile = load_profile(USER_DIR, os.path.getmtime(JSON_FILE))
 
+st.dataframe(profile)
+
 
 def pget(champs, lo=None, hi=None):
     """1re valeur numérique plausible parmi une liste de noms de champs possibles."""
