@@ -320,19 +320,6 @@ if runs.empty:
     st.stop()
     
 
-# ----------------------------------------------------------
-# 3bis. PROFIL UTILISATEUR (DI-Connect-User)
-#   df totalement séparé de `runs` : une ligne = un champ du profil.
-# ----------------------------------------------------------
-USER_DIR = None
-for root, dirs, files in os.walk(DATA_DIR):
-    for d in dirs:
-        if "di-connect-wellness" in d.lower():
-            USER_DIR = os.path.join(root, d)
-            break
-    if USER_DIR is not None:
-        break
-
 Hrz_File = None
 for root, dirs, files in os.walk(DATA_DIR):
     for fn in files:
@@ -341,8 +328,6 @@ for root, dirs, files in os.walk(DATA_DIR):
             break
     if Hrz_File is not None:
         break
-        
-st.write(Hrz_File)
 
 @st.cache_data(show_spinner="Lecture des zones FC Garmin…")
 def load_json_file(json_file, mtime):
