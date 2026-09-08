@@ -341,6 +341,8 @@ for root, dirs, files in os.walk(DATA_DIR):
             break
     if Hrz_File is not None:
         break
+        
+st.write(Hrz_File)
 
 @st.cache_data(show_spinner="Lecture des zones FC Garmin…")
 def load_json_file(json_file, mtime):
