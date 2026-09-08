@@ -380,7 +380,7 @@ hrz = load_json_file(
 )
 
 HR_MAX_GARMIN = int(hrz.loc[hrz["Champ"] == "maxHeartRateUsed", "Valeur"].iloc[0])
-HR_MAX = if HR_MAX_GARMIN else HR_MAX_DEFAULT
+HR_MAX = HR_MAX_GARMIN if HR_MAX_GARMIN else HR_MAX_DEFAULT
 
 VO2_FIELD_PRIO = ("vo2maxprecisevalue", "maxmet", "vo2maxvalue", "vo2max")
 VO2_DATE_KEYS = ("calendardate", "calendarday", "date", "timestamp", "startdate")
