@@ -43,7 +43,7 @@ except Exception:
 # 1. CONFIG & THEME
 # ----------------------------------------------------------
 st.set_page_config(
-    page_title="Run Analytics · Garmin",
+    page_title="Run Analytics · Garmin -- Application Running",
     page_icon="🏃",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -318,8 +318,89 @@ runs = load_runs(JSON_FILE, os.path.getmtime(JSON_FILE))
 if runs.empty:
     st.error("Aucune course trouvée dans cet export.")
     st.stop()
+    
 
-#VO2_FIELD_PRIO = ("vo2maxprecisevalue", "vo2maxvalue", "vo2max", "maxmet")
+# ----------------------------------------------------------
+# 3bis. PROFIL UTILISATEUR (DI-Connect-User)
+#   df totalement séparé de `runs` : une ligne = un champ du profil.
+# ----------------------------------------------------------
+USER_DIR = None
+for root, dirs, files in os.walk(DATA_DIR):
+    for d in dirs:
+        if "di-connect-user" in d.lower():
+            USER_DIR = os.path.join(root, d)
+            break
+    if USER_DIR is not None:
+        break
+
+
+@st.cache_data(show_spinner="Lecture du profil Garmin…")
+def load_profile(user_dir, mtime):
+    """Aplatit tous les JSON de DI-Connect-User en un df Fichier/Champ/Chemin/Valeur."""
+    rows = []
+
+    def flat(obj, fichier, chemin=""):
+        if isinstance(obj, dict):
+            for k, v in obj.items():
+                flat(v, fichier, f"{chemin}.{k}" if chemin else str(k))
+        elif isinstance(obj, list):
+            for i, v in enumerate(obj[:100]):          # garde-fou sur les gros tableaux
+                flat(v, fichier, f"{chemin}[{i}]")
+        elif obj is not None and obj != "":
+            rows.append({"Fichier": fichier,
+                         "Champ": chemin.split(".")[-1].split("[")[0],
+                         "Chemin": chemin,
+                         "Valeur": str(obj)})          # str = pas de souci Arrow
+
+    if not user_dir or not os.path.exists(user_dir):
+        return pd.DataFrame(columns=["Fichier", "Champ", "Chemin", "Valeur"])
+
+    for root, _dirs, files in os.walk(user_dir):
+        for fn in sorted(files):
+            if not fn.lower().endswith(".json"):
+                continue
+            try:
+                with open(os.path.join(root, fn), "r", encoding="utf-8") as f:
+                    raw = json.load(f)
+                if isinstance(raw, str):               # JSON encapsulé dans une string
+                    raw = json.loads(raw)
+                flat(raw, fn)
+            except Exception:
+                continue
+
+    return pd.DataFrame(rows)
+
+
+profile = load_profile(USER_DIR, os.path.getmtime(JSON_FILE))
+
+
+def pget(champs, lo=None, hi=None):
+    """1re valeur numérique plausible parmi une liste de noms de champs possibles."""
+    if profile.empty:
+        return None
+    low = profile["Champ"].str.lower()
+    for nom in champs:
+        m = pd.to_numeric(profile.loc[low == nom.lower(), "Valeur"],
+                          errors="coerce").dropna()
+        for v in m:
+            if (lo is None or v >= lo) and (hi is None or v <= hi):
+                return float(v)
+    return None
+
+
+# --- FC max du profil Garmin (ordre = priorité) ---
+HR_MAX_GARMIN = pget(["userDefinedMaxHeartRate", "maxHeartRate",
+                      "autoDetectedMaxHeartRate", "maxHeartRateUsed", "maxHr"], 120, 230)
+HR_MAX = int(round(HR_MAX_GARMIN)) if HR_MAX_GARMIN else HR_MAX_DEFAULT
+
+# --- bonus dispo au cas où (None si absent de l'export) ---
+HR_REST  = pget(["restingHeartRate", "restingHr"], 30, 100)
+HR_SEUIL = pget(["lactateThresholdHeartRate", "lactateThresholdBpm"], 100, 220)
+
+
+
+
+
 VO2_FIELD_PRIO = ("vo2maxprecisevalue", "maxmet", "vo2maxvalue", "vo2max")
 VO2_DATE_KEYS = ("calendardate", "calendarday", "date", "timestamp", "startdate")
 VO2_FILE_HINTS = ("maxmet", "metric", "vo2", "fitnessage")
@@ -405,8 +486,24 @@ def load_vo2_profile(data_dir, sig):
 with st.sidebar:
     period = st.radio("Période", ["30 jours", "3 mois", "Tout"], index=2, horizontal=True)
     dmin = st.slider("Distance minimale (km)", 0.0, 15.0, 1.0, 0.5)
-    hrmax = st.number_input("FC max (bpm)", 150, 220, HR_MAX_DEFAULT, 1,
+    hrmax = st.number_input("FC max (bpm)", 140, 230, HR_MAX, 1,
                             help="Base de calcul des zones d'intensité et de la charge.")
+    if HR_MAX_GARMIN:
+        st.caption(f"✅ Lue dans le profil Garmin : **{HR_MAX} bpm**")
+    else:
+        st.caption(f"⚠️ Introuvable dans l'export → valeur par défaut **{HR_MAX_DEFAULT} bpm**")
+
+    with st.expander("🔎 Profil Garmin (DI-Connect-User)"):
+        if profile.empty:
+            st.caption("Dossier `DI-Connect-User` absent ou illisible.")
+        else:
+            f = st.text_input("Filtrer un champ", "heart",
+                              help="Essaie : heart, hr, vo2, threshold, weight…")
+            v = profile[profile["Champ"].str.contains(f, case=False, na=False)] if f else profile
+            st.dataframe(v[["Fichier", "Champ", "Valeur"]],
+                         hide_index=True, use_container_width=True, height=260)
+            st.caption(f"{len(profile)} champs · fichiers : "
+                       + ", ".join(f"`{x}`" for x in sorted(profile['Fichier'].unique())[:6]))
     smooth = st.slider("Lissage des tendances (nb séances)", 3, 15, 7, 2)
     st.caption(f"📄 {os.path.basename(JSON_FILE)} · {len(runs)} courses · "
                f"maj {pd.to_datetime(os.path.getmtime(JSON_FILE), unit='s'):%d/%m/%Y}")
