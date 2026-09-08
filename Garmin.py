@@ -324,7 +324,7 @@ Hrz_File = None
 for root, dirs, files in os.walk(DATA_DIR):
     for fn in files:
         if fn.lower().endswith('heartRateZones.json'):
-            Hrz_File = os.path.join(root, d) 
+            Hrz_File = os.path.join(root, fn) 
             break
     if Hrz_File is not None:
         break
