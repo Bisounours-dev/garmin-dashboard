@@ -379,35 +379,8 @@ hrz = load_json_file(
     os.path.getmtime(Hrz_File) if Hrz_File else 0
 )
 
-st.dataframe(hrz)
-
-
-def pget(champs, lo=None, hi=None):
-    """1re valeur numérique plausible parmi une liste de noms de champs possibles."""
-    if profile.empty:
-        return None
-    low = profile["Champ"].str.lower()
-    for nom in champs:
-        m = pd.to_numeric(profile.loc[low == nom.lower(), "Valeur"],
-                          errors="coerce").dropna()
-        for v in m:
-            if (lo is None or v >= lo) and (hi is None or v <= hi):
-                return float(v)
-    return None
-
-
-# --- FC max du profil Garmin (ordre = priorité) ---
-HR_MAX_GARMIN = pget(["userDefinedMaxHeartRate", "maxHeartRate",
-                      "autoDetectedMaxHeartRate", "maxHeartRateUsed", "maxHr"], 120, 230)
-HR_MAX = int(round(HR_MAX_GARMIN)) if HR_MAX_GARMIN else HR_MAX_DEFAULT
-
-# --- bonus dispo au cas où (None si absent de l'export) ---
-HR_REST  = pget(["restingHeartRate", "restingHr"], 30, 100)
-HR_SEUIL = pget(["lactateThresholdHeartRate", "lactateThresholdBpm"], 100, 220)
-
-
-
-
+HR_MAX_GARMIN = int(hrz.loc[hrz["Champ"] == "maxHeartRateUsed", "Valeur"].iloc[0])
+HR_MAX = if HR_MAX_GARMIN else HR_MAX_DEFAULT
 
 VO2_FIELD_PRIO = ("vo2maxprecisevalue", "maxmet", "vo2maxvalue", "vo2max")
 VO2_DATE_KEYS = ("calendardate", "calendarday", "date", "timestamp", "startdate")
