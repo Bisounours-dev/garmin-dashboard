@@ -40,7 +40,7 @@ except Exception:
 # 1. CONFIG & THEME
 # ----------------------------------------------------------
 st.set_page_config(
-    page_title="Run Analytics · Garmin -- Application Running",
+    page_title="Run Analytics",
     page_icon="🏃",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -516,7 +516,7 @@ d["Semaine"] = d["Date"].dt.to_period("W-SUN").dt.start_time
 # 4. HERO + KPI
 # ----------------------------------------------------------
 st.markdown(
-    f'<div class="hero"><h1>🏃 Run Analytics</h1>'
+    f'<div class="hero"><h1>🏃 Run Analytics  -- Données Running uniquement </h1>'
     f'<p>{len(d)} séances · {d["Distance (km)"].sum():.0f} km · '
     f'{d["Temps (min)"].sum()/60:.0f} h · FC max référence {hrmax} bpm · '
     f'du {d["Date"].min():%d/%m/%Y} au {d["Date"].max():%d/%m/%Y}</p></div>',
