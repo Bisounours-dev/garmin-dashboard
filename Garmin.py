@@ -271,8 +271,8 @@ if JSON_FILE is None:
         '<p>Voici le lien pour télécharger vos données depuis le site de Garmin : '
         '<a href="https://www.garmin.com/fr-FR/account/datamanagement/exportdata" '
         'target="_blank">📥 Télécharger mes données Garmin</a></p>'
-        "<p>Cliquez simplement sur le bouton : 'DEMANDEZ l'EXPORT DE DONNEES </p>"
-        "<p>Un lien sera disponible dans votre boite mail sous quelques heures en général. Il suffira de le charger dans la barre latéral</p>"
+        "<p>Cliquez simplement sur le bouton : 'DEMANDEZ l'EXPORT DE DONNEES' </p>"
+        "<p>Un lien sera disponible dans votre boite mail sous quelques heures en général. Il suffira de le charger dans la barre latéral.</p>"
         '</div>',
         unsafe_allow_html=True
     )
