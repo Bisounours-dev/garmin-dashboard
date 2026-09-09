@@ -263,16 +263,13 @@ if os.path.exists(DATA_DIR):
                 break
         if JSON_FILE is not None:
             break
+
 if JSON_FILE is None:
-    st.markdown(
-        '<div class="hero">'
-        '<h1>🏃 Run Analytics</h1>'
-        '<p>⚠️ Aucune donnée Garmin trouvée.</p>'
-        '<p><a href="https://www.garmin.com/fr-FR/account/datamanagement/exportdata" '
-        'target="_blank">📥 Télécharger mes données Garmin</a></p>'
-        '</div>',
-        unsafe_allow_html=True
-    )
+    st.markdown('<div class="hero"><h1>🏃 Run Analytics</h1>'
+                '<p>⚠️ Aucune donnée Garmin trouvée. Charge une sauvegarde ZIP dans la barre latérale.</p>'
+                '<p><a href="https://www.garmin.com/fr-FR/account/datamanagement/exportdata" '
+                'target="_blank">📥 Télécharger mes données Garmin</a></p>''</div>',
+                unsafe_allow_html=True)
     st.stop()
 
 
