@@ -267,10 +267,12 @@ if os.path.exists(DATA_DIR):
 if JSON_FILE is None:
     st.markdown(
         '<div class="hero"><h1>🏃 Run Analytics</h1>'
-        '<p>⚠️ Aucune donnée Garmin trouvée. Charge une sauvegarde ZIP dans la barre latérale.</p>'
+        '<p>⚠️ Aucune donnée Garmin trouvée. Chargez une sauvegarde ZIP dans la barre latérale.</p>'
         '<p>Voici le lien pour télécharger vos données depuis le site de Garmin : '
         '<a href="https://www.garmin.com/fr-FR/account/datamanagement/exportdata" '
         'target="_blank">📥 Télécharger mes données Garmin</a></p>'
+        "<p>Cliquez simplement sur le bouton : 'DEMANDEZ l'EXPORT DE DONNEES </p>"
+        "<p>Un lien sera disponible dans votre boite mail sous quelques heures en général. Il suffira de le charger dans la barre latéral</p>"
         '</div>',
         unsafe_allow_html=True
     )
