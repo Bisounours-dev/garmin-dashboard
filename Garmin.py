@@ -537,7 +537,7 @@ kpi(r1[2], "FC moyenne 28 j", f'{cur["BPM moyen"].mean():.0f}', "bpm",
 
 st.write("")
 r2 = st.columns(3)
-kpi(r2[0], "Indice efficacité", f'{cur["Indice efficacité"].mean():.2f}', "",
+kpi(r2[0], "Indice efficacité cardiaque", f'{cur["Indice efficacité"].mean():.2f}', "",
     pct(cur["Indice efficacité"].mean(), prev["Indice efficacité"].mean()), color=C["eff"])
 kpi(r2[1], "Séances 28 j", f'{len(cur)}', "runs", pct(len(cur), len(prev)), color=C["load"])
 kpi(r2[2], "Plus longue sortie 28 j", f'{cur["Distance (km)"].max():.1f}', "km",
