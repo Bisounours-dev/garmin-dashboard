@@ -5,6 +5,7 @@ import shutil
 import tempfile
 import zipfile
 from datetime import timedelta
+from datetime import date, timedelta
 
 import numpy as np
 import pandas as pd
@@ -252,6 +253,170 @@ with st.sidebar.expander("📁 Données Garmin", expanded=not os.path.exists(DAT
                 st.error("❌ Le fichier sélectionné n'est pas un ZIP valide.")
             except Exception as e:
                 st.error(f"❌ Une erreur est survenue : {e}")
+                
+                
+# ----------------------------------------------------------
+# 3 bis. [AJOUT] SYNCHRO DIRECTE GARMIN CONNECT (package garminconnect)
+#        -> écrit les fichiers au même format que l'export ZIP
+# ----------------------------------------------------------
+TOKEN_DIR = os.path.join(os.path.expanduser("~"), ".garminconnect")
+
+
+def _to_ms(v):
+    try:
+        return int(pd.Timestamp(v).value // 1_000_000) if v else None
+    except Exception:
+        return None
+
+
+def _api_to_export(a):
+    """Activité API -> format *_summarizedActivities.json (unités de l'export)."""
+    t = a.get("activityType") or {}
+    key = str(t.get("typeKey", "")).lower()
+    is_run = "running" in key or t.get("typeId") == 1 or t.get("parentTypeId") == 1
+    out = dict(a)                                   # garde hrTimeInZone_*, vO2MaxValue, températures…
+    out["sportType"] = "RUNNING" if is_run else key.upper()
+    out["startTimeLocal"] = _to_ms(a.get("startTimeLocal"))   # "AAAA-MM-JJ hh:mm:ss" -> epoch ms
+    out["distance"] = (a.get("distance") or 0) * 100          # m  -> cm
+    out["duration"] = (a.get("duration") or 0) * 1000         # s  -> ms
+    out["avgHr"] = a.get("averageHR")
+    out["maxHr"] = a.get("maxHR")
+    out.setdefault("trainingEffectLabel", None)
+    return out
+
+
+def _garmin_client(email, password):
+    from garminconnect import Garmin
+    try:                                            # 1) session déjà enregistrée
+        c = Garmin()
+        c.login(TOKEN_DIR)
+        return c
+    except Exception:
+        if not (email and password):
+            raise RuntimeError("Aucune session enregistrée : saisis ton e-mail et ton mot de passe.")
+    c = Garmin(email, password)                     # 2) identifiants -> tokens sauvegardés
+    c.login(TOKEN_DIR)
+    return c
+
+
+def _api_hr_zones(client):
+    f = getattr(client, "get_heart_rate_zones", None)
+    for call in ((lambda: f()) if callable(f) else None,
+                 lambda: client.connectapi("/biometric-service/heartRateZones")):
+        if call is None:
+            continue
+        try:
+            z = call()
+            if z and "maxHeartRateUsed" in json.dumps(z):
+                return z, True
+        except Exception:
+            pass
+    return [{"sport": "DEFAULT", "maxHeartRateUsed": HR_MAX_DEFAULT}], False
+
+
+def _api_vo2(client, start, end, run_dates):
+    rows = []
+
+    def add(blob):
+        for it in (blob if isinstance(blob, list) else [blob]):
+            g = it.get("generic") if isinstance(it, dict) else None
+            if g and (g.get("vo2MaxPreciseValue") or g.get("vo2MaxValue")):
+                rows.append({"calendarDate": g.get("calendarDate"),
+                             "vo2MaxPreciseValue": g.get("vo2MaxPreciseValue"),
+                             "vo2MaxValue": g.get("vo2MaxValue"),
+                             "sport": "RUNNING"})
+
+    cur = start                                     # plage par blocs de 90 j
+    while cur <= end:
+        stop = min(cur + timedelta(days=89), end)
+        try:
+            add(client.connectapi(f"/metrics-service/metrics/maxmet/daily/{cur}/{stop}"))
+        except Exception:
+            pass
+        cur = stop + timedelta(days=1)
+
+    if not rows:                                    # secours : 1 appel par jour couru
+        for dd in sorted(set(run_dates)):
+            try:
+                add(client.get_max_metrics(dd))
+            except Exception:
+                pass
+    return rows
+
+
+def sync_garmin(client, start, with_feel):
+    end = date.today()
+    acts = client.get_activities_by_date(start.isoformat(), end.isoformat())
+    export = [_api_to_export(a) for a in acts or []]
+    runs_api = [r for r in export if r["sportType"] == "RUNNING"]
+
+    if with_feel and runs_api:                      # ressenti / RPE (1 appel par course)
+        bar = st.progress(0.0, text="Récupération des ressentis…")
+        for i, r in enumerate(runs_api):
+            if r.get("directWorkoutFeel") is None and r.get("workoutFeel") is None:
+                try:
+                    s = (client.get_activity(r["activityId"]) or {}).get("summaryDTO", {})
+                    r["directWorkoutFeel"] = s.get("directWorkoutFeel")
+                    r.setdefault("workoutRpe", s.get("directWorkoutRpe"))
+                except Exception:
+                    pass
+            bar.progress((i + 1) / len(runs_api), text=f"Ressentis… {i+1}/{len(runs_api)}")
+        bar.empty()
+
+    hrz_api, hrz_ok = _api_hr_zones(client)
+    run_dates = [str(a.get("startTimeLocal", ""))[:10] for a in acts or []
+                 if _api_to_export(a)["sportType"] == "RUNNING"]
+    vo2 = _api_vo2(client, start, end, run_dates)
+
+    # Écriture dans un dossier temporaire puis remplacement de Data_Garmin
+    os.makedirs(BASE_DIR, exist_ok=True)
+    tmp = tempfile.mkdtemp(dir=BASE_DIR)
+    new_dir = os.path.join(tmp, "Data_Garmin")
+    for sub, fn, content in [
+        ("DI-Connect-Fitness", "api_summarizedActivities.json", [{"summarizedActivitiesExport": export}]),
+        ("DI-Connect-User", "api_heartRateZones.json", hrz_api),
+        ("DI-Connect-Metrics", "MetricsMaxMetData_api.json", vo2),
+    ]:
+        os.makedirs(os.path.join(new_dir, sub), exist_ok=True)
+        with open(os.path.join(new_dir, sub, fn), "w", encoding="utf-8") as fh:
+            json.dump(content, fh, ensure_ascii=False, default=str)
+
+    if os.path.exists(DATA_DIR):
+        shutil.rmtree(DATA_DIR)
+    shutil.move(new_dir, DATA_DIR)
+    shutil.rmtree(tmp, ignore_errors=True)
+    return len(runs_api), len(vo2), hrz_ok
+
+
+with st.sidebar.expander("🔄 Synchroniser via Garmin Connect", expanded=False):
+    has_token = os.path.exists(os.path.join(TOKEN_DIR, "garmin_tokens.json"))
+    if has_token:
+        st.caption("✅ Session Garmin enregistrée : pas besoin d'identifiants.")
+    g_mail = st.text_input("E-mail Garmin", value=os.getenv("GARMIN_EMAIL", ""),
+                           disabled=has_token)
+    g_pwd = st.text_input("Mot de passe", type="password", disabled=has_token)
+    g_start = st.date_input("Depuis le", value=date(2015, 1, 1), format="DD/MM/YYYY")
+    g_feel = st.checkbox("Récupérer aussi le ressenti (plus lent)", value=True)
+
+    if st.button("🔄 Télécharger mes données", use_container_width=True):
+        try:
+            with st.spinner("Connexion à Garmin Connect…"):
+                client = _garmin_client(g_mail, g_pwd)
+            with st.spinner("Téléchargement des activités…"):
+                n_runs, n_vo2, hrz_ok = sync_garmin(client, g_start, g_feel)
+            st.cache_data.clear()
+            st.success(f"✅ {n_runs} courses · {n_vo2} valeurs VO2max synchronisées.")
+            if not hrz_ok:
+                st.warning(f"FC max introuvable via l'API → {HR_MAX_DEFAULT} bpm utilisé.")
+            st.rerun()
+        except ImportError:
+            st.error("❌ Package manquant : `pip install -U garminconnect`")
+        except Exception as e:
+            st.error(f"❌ Échec de la synchro : {e}")
+
+    if has_token and st.button("🚪 Oublier la session", use_container_width=True):
+        shutil.rmtree(TOKEN_DIR, ignore_errors=True)
+        st.rerun()
 
 # --- Recherche du fichier JSON (comme avant : le premier trouvé) ---
 JSON_FILE = None
