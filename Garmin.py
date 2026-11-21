@@ -1248,6 +1248,11 @@ with tab3:
     st.markdown("#### 🎚️ Où passes-tu ton temps ? · zones d'intensité par mois")
 
     ZS_SHORT = ["Z1", "Z2", "Z3", "Z4", "Z5"]
+    ZS_COL = ["#94A3B8",   # Z1 · gris
+              "#3B82F6",   # Z2 · bleu
+              "#4ADE80",   # Z3 · vert
+              "#FB923C",   # Z4 · orange
+              "#EF4444"]   # Z5 · rouge
 
 
     def _z_suffix(c):
@@ -1314,7 +1319,8 @@ with tab3:
             pc, mn = share[zs].to_numpy(), g[zs].to_numpy()
             fz.add_bar(
                 x=xlab, y=pc, name=Z_NAME[i],
-                marker=dict(color=Z_HEX[i], opacity=.92, line=dict(width=0)),
+                #marker=dict(color=Z_HEX[i], opacity=.92, line=dict(width=0)),
+                marker=dict(color=ZS_COL[i], opacity=.92, line=dict(width=0)),
                 text=[f"{v:.0f} %" if v >= 6 else "" for v in pc],
                 textposition="inside", insidetextanchor="middle",
                 textfont=dict(color="#0B1220", size=11.5),
