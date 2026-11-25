@@ -815,15 +815,31 @@ with tab1:
         hovertemplate="<b>%{x|%d/%m/%Y}</b><br>🏃 Allure <b>%{customdata[0]}</b> /km"
                       "<br>📏 %{customdata[1]:.1f} km · ❤️ %{customdata[2]:.0f} bpm"
                       "<br>😊 %{customdata[3]} · 🌡️ %{customdata[4]}°C<extra></extra>"))
+    # --- [CORRECTIF] Tendances calculées sur 1 point par JOUR -------------
+    #  Plusieurs séances le même jour = plusieurs x très proches (quelques heures)
+    #  avec des y différents -> la courbe "spline" faisait des traits verticaux.
+    #  On agrège donc d'abord par jour, puis on lisse la série quotidienne.
+    tr = d[["Date", "Distance (km)", "Temps (min)", "BPM moyen"]].copy()
+    tr["Jour"] = tr["Date"].dt.normalize()
+    tr["hr_x_t"] = tr["BPM moyen"] * tr["Temps (min)"]                 # FC pondérée par la durée
+    tr["t_hr"] = tr["Temps (min)"].where(tr["BPM moyen"].notna())       # durée des séances avec FC
+    tday = (tr.groupby("Jour")
+              .agg(km=("Distance (km)", "sum"), mn=("Temps (min)", "sum"),
+                   hr_x_t=("hr_x_t", "sum"), t_hr=("t_hr", "sum"))
+              .sort_index())
+    tday["pace"] = tday["mn"] / tday["km"].replace(0, np.nan)            # allure du jour = temps total / km total
+    tday["bpm"] = tday["hr_x_t"] / tday["t_hr"].replace(0, np.nan)      # FC moyenne pondérée du jour
+
     f.add_trace(go.Scatter(
-        x=d["Date"], y=d["Allure (min/km)"].rolling(smooth, min_periods=2, center=True).mean(),
-        mode="lines", name=f"Tendance allure ({smooth})",
-        line=dict(color=C["pace"], width=3.5, shape="spline"), hoverinfo="skip"))
+        x=tday.index, y=tday["pace"].rolling(smooth, min_periods=2, center=True).mean(),
+        mode="lines", name=f"Tendance allure ({smooth} j. couru)",
+        line=dict(color=C["pace"], width=3.5, shape="spline", smoothing=0.8),
+        connectgaps=True, hoverinfo="skip"))
     f.add_trace(go.Scatter(
-        x=d["Date"], y=d["BPM moyen"].rolling(smooth, min_periods=2, center=True).mean(),
-        mode="lines", name=f"Tendance FC ({smooth})",
-        line=dict(color=C["hr"], width=3.5, shape="spline", dash="dot"),
-        hoverinfo="skip"), secondary_y=True)
+        x=tday.index, y=tday["bpm"].rolling(smooth, min_periods=2, center=True).mean(),
+        mode="lines", name=f"Tendance FC ({smooth} j. couru)",
+        line=dict(color=C["hr"], width=3.5, shape="spline", smoothing=0.8, dash="dot"),
+        connectgaps=True, hoverinfo="skip"), secondary_y=True)
 
     tv, tt = pace_ticks(d["Allure (min/km)"])
     f.update_yaxes(title_text="Allure (min/km)", autorange="reversed",
